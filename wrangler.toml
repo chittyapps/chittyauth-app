@@ -1,0 +1,87 @@
+name = "chittyauth"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"  # ChittyCorp LLC main account
+
+# Production environment
+[env.production]
+name = "chittyauth-production"
+
+# Route configuration for auth.chitty.cc
+[[env.production.routes]]
+pattern = "auth.chitty.cc/*"
+zone_name = "chitty.cc"
+
+# KV Namespaces for Token Storage
+[[env.production.kv_namespaces]]
+binding = "AUTH_TOKENS"
+id = "CREATE_NEW_KV_NAMESPACE"  # Run: wrangler kv:namespace create AUTH_TOKENS --env production
+
+[[env.production.kv_namespaces]]
+binding = "AUTH_REVOCATIONS"
+id = "CREATE_NEW_KV_NAMESPACE"  # Run: wrangler kv:namespace create AUTH_REVOCATIONS --env production
+
+[[env.production.kv_namespaces]]
+binding = "AUTH_RATE_LIMITS"
+id = "CREATE_NEW_KV_NAMESPACE"  # Run: wrangler kv:namespace create AUTH_RATE_LIMITS --env production
+
+[[env.production.kv_namespaces]]
+binding = "AUTH_AUDIT"
+id = "CREATE_NEW_KV_NAMESPACE"  # Run: wrangler kv:namespace create AUTH_AUDIT --env production
+
+# D1 Database for Token Persistence
+[[env.production.d1_databases]]
+binding = "AUTH_DB"
+database_name = "chittyauth-db"
+database_id = "CREATE_NEW_D1_DATABASE"  # Run: wrangler d1 create chittyauth-db
+
+# Environment Variables
+[env.production.vars]
+ENVIRONMENT = "production"
+CHITTYCONNECT_URL = "https://connect.chitty.cc"
+DEFAULT_TOKEN_EXPIRY = "2592000"  # 30 days in seconds
+MAX_TOKENS_PER_USER = "10"
+
+# Secrets (set via: wrangler secret put <NAME> --env production)
+# TOKEN_SIGNING_KEY - 256-bit secret key for token signatures
+# CHITTYCONNECT_API_KEY - Service token for ChittyConnect integration
+
+# Development environment
+[env.development]
+name = "chittyauth-dev"
+
+[[env.development.kv_namespaces]]
+binding = "AUTH_TOKENS"
+id = "CREATE_DEV_KV"
+
+[[env.development.kv_namespaces]]
+binding = "AUTH_REVOCATIONS"
+id = "CREATE_DEV_KV"
+
+[[env.development.kv_namespaces]]
+binding = "AUTH_RATE_LIMITS"
+id = "CREATE_DEV_KV"
+
+[[env.development.kv_namespaces]]
+binding = "AUTH_AUDIT"
+id = "CREATE_DEV_KV"
+
+[[env.development.d1_databases]]
+binding = "AUTH_DB"
+database_name = "chittyauth-dev-db"
+database_id = "CREATE_DEV_D1"
+
+[env.development.vars]
+ENVIRONMENT = "development"
+CHITTYCONNECT_URL = "https://connect-dev.chitty.cc"
+DEFAULT_TOKEN_EXPIRY = "86400"  # 1 day for dev
+MAX_TOKENS_PER_USER = "50"
+
+# Compatibility settings
+[build]
+command = "npm run build"
+
+[build.upload]
+format = "modules"
+main = "./worker.js"
