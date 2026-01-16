@@ -1,0 +1,35 @@
+# ChittyConnect Configuration for chittyauth-app
+service:
+  name: chittyauth-app
+  display_name: Chittyauth app
+  type: application
+  tier: 5
+  organization: CHITTYAPPS
+  chitty_id: ${CHITTYAUTH_APP_SERVICE_ID}
+  domains:
+    production: auth-app.chitty.cc
+
+onboarding:
+  endpoint: https://get.chitty.cc/api/onboard
+  provisions: [chitty_id, service_token, certificate, trust_chain]
+
+auth:
+  provider: chittyauth
+  endpoint: https://auth.chitty.cc
+  service_token:
+    source: chittyconnect
+    key: CHITTYAUTH_APP_SERVICE_TOKEN
+
+secrets:
+  provider: chittyconnect
+  vault: 1password
+  paths:
+    production: op://ChittyOS/chittyauth-app-prod
+
+github:
+  repository: CHITTYAPPS/chittyauth-app
+
+monitoring:
+  health:
+    endpoint: /health
+    interval: 60s

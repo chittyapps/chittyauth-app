@@ -6,7 +6,6 @@ account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"  # ChittyCorp LLC main account
 
 # Production environment
 [env.production]
-name = "chittyauth-production"
 
 # Route configuration for auth.chitty.cc
 [[env.production.routes]]
@@ -49,7 +48,6 @@ MAX_TOKENS_PER_USER = "10"
 
 # Development environment
 [env.development]
-name = "chittyauth-dev"
 
 [[env.development.kv_namespaces]]
 binding = "AUTH_TOKENS"
