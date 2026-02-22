@@ -1,6 +1,7 @@
 # ChittyAuth App Charter
 
 ## Classification
+- **Canonical URI**: `chittycanon://core/services/chittyauth-app`
 - **Tier**: 3 (Service Layer)
 - **Organization**: CHITTYAPPS
 - **Domain**: Custom (not auth.chitty.cc)
@@ -134,6 +135,8 @@ JWT-like structure: `header.payload.signature`
 ## Compliance
 
 - [ ] CLAUDE.md development guide present
+- [ ] CHARTER.md present
+- [ ] CHITTY.md present
 - [ ] D1 database initialized with schema
 - [ ] All KV namespaces created and bound
 - [ ] TOKEN_SIGNING_KEY secret set (256-bit)
@@ -151,4 +154,4 @@ JWT-like structure: `header.payload.signature`
 - [ ] Never log token values (only hashes)
 
 ---
-*Charter Version: 1.0.0 | Last Updated: 2026-01-13*
+*Charter Version: 1.1.0 | Last Updated: 2026-02-21*
