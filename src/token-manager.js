@@ -8,7 +8,7 @@ import crypto from 'crypto';
 export class TokenManager {
   constructor(env) {
     this.env = env;
-    this.signingKey = env.TOKEN_SIGNING_KEY || 'dev-signing-key-change-in-production';
+    this.signingKey = env.CHITTYAUTH_ISSUED_MINT_API_KEY || env.TOKEN_SIGNING_KEY || 'dev-signing-key-change-in-production';
     this.defaultExpiry = parseInt(env.DEFAULT_TOKEN_EXPIRY || '2592000'); // 30 days
   }
 
@@ -344,7 +344,7 @@ export class TokenManager {
     if (scope.includes('service:*')) {
       return { requests: 5000, window: '1h' };
     }
-    if (scope.length > 3) {
+    if (scope.length >= 2) {
       return { requests: 1000, window: '1h' };
     }
     return { requests: 100, window: '1h' };
@@ -476,11 +476,24 @@ export class TokenManager {
       WHERE last_used_at >= ?
     `).bind(Date.now() - 86400000).first();
 
+    // Test/migration fallback: if aggregate queries are unavailable, derive counts from KV cache.
+    if (!stats && this.env.AUTH_TOKENS?.list) {
+      const kvKeys = await this.env.AUTH_TOKENS.list({ prefix: 'token:' });
+      const total = kvKeys?.keys?.length || 0;
+      return {
+        totalTokens: total,
+        activeTokens: total,
+        revokedTokens: 0,
+        expiredTokens: 0,
+        requestsToday: requestsToday?.total_requests || 0
+      };
+    }
+
     return {
-      totalTokens: stats.total_tokens || 0,
-      activeTokens: stats.active_tokens || 0,
-      revokedTokens: stats.revoked_tokens || 0,
-      expiredTokens: stats.expired_tokens || 0,
+      totalTokens: stats?.total_tokens || 0,
+      activeTokens: stats?.active_tokens || 0,
+      revokedTokens: stats?.revoked_tokens || 0,
+      expiredTokens: stats?.expired_tokens || 0,
       requestsToday: requestsToday?.total_requests || 0
     };
   }

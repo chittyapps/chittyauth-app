@@ -6,6 +6,7 @@
 import { TokenManager } from './token-manager.js';
 import { ChittyConnectClient } from './chittyconnect-client.js';
 import { RegistrationHandler } from './registration-handler.js';
+import { AuthProviderFacade } from './auth-provider.js';
 
 export class ChittyAuthAPI {
   constructor(env) {
@@ -13,6 +14,7 @@ export class ChittyAuthAPI {
     this.tokenManager = new TokenManager(env);
     this.chittyConnect = new ChittyConnectClient(env);
     this.registrationHandler = new RegistrationHandler(env);
+    this.authProvider = new AuthProviderFacade(env);
   }
 
   /**
@@ -74,6 +76,17 @@ export class ChittyAuthAPI {
         return await this.handleConnectVerify(request);
       }
 
+      // Auth provider status/facade endpoints
+      if (path === '/v1/auth/provider/status' && method === 'GET') {
+        return await this.handleProviderStatus();
+      }
+      if (path === '/v1/auth/neon/oauth/authorize-url' && method === 'POST') {
+        return await this.handleNeonAuthorizeUrl(request);
+      }
+      if (path === '/v1/auth/neon/oauth/token-exchange' && method === 'POST') {
+        return await this.handleNeonTokenExchange(request);
+      }
+
       // 404 for unknown routes
       return this.jsonResponse({
         success: false,
@@ -87,6 +100,9 @@ export class ChittyAuthAPI {
           'POST /v1/service/authenticate',
           'GET /v1/tokens/stats',
           'POST /v1/connect/verify',
+          'GET /v1/auth/provider/status',
+          'POST /v1/auth/neon/oauth/authorize-url',
+          'POST /v1/auth/neon/oauth/token-exchange',
           'GET /health'
         ]
       }, 404);
@@ -384,6 +400,41 @@ export class ChittyAuthAPI {
         chittyConnect: chittyConnectHealth.healthy ? 'healthy' : 'unhealthy'
       }
     }, 200);
+  }
+
+  async handleProviderStatus() {
+    const status = this.authProvider.getStatus();
+    return this.jsonResponse({ success: true, ...status }, 200);
+  }
+
+  async handleNeonAuthorizeUrl(request) {
+    try {
+      const body = await request.json();
+      const authorizeUrl = this.authProvider.buildNeonAuthorizeUrl({
+        redirectUri: body.redirectUri,
+        state: body.state,
+        codeChallenge: body.codeChallenge,
+        scope: body.scope
+      });
+      return this.jsonResponse({ success: true, authorizeUrl }, 200);
+    } catch (error) {
+      return this.jsonResponse({ success: false, error: error.message }, 400);
+    }
+  }
+
+  async handleNeonTokenExchange(request) {
+    try {
+      const body = await request.json();
+      const result = await this.authProvider.exchangeNeonCode({
+        code: body.code,
+        redirectUri: body.redirectUri,
+        codeVerifier: body.codeVerifier
+      });
+      const status = result.success ? 200 : 400;
+      return this.jsonResponse(result, status);
+    } catch (error) {
+      return this.jsonResponse({ success: false, error: error.message }, 500);
+    }
   }
 
   /**

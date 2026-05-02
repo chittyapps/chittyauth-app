@@ -39,12 +39,19 @@ database_id = "CREATE_NEW_D1_DATABASE"  # Run: wrangler d1 create chittyauth-db
 [env.production.vars]
 ENVIRONMENT = "production"
 CHITTYCONNECT_URL = "https://connect.chitty.cc"
+CHITTYAUTH_PROVIDER = "local" # set to "neon" to enable Neon OAuth facade endpoints
+NEON_OAUTH_HOST = "https://oauth2.neon.tech"
 DEFAULT_TOKEN_EXPIRY = "2592000"  # 30 days in seconds
 MAX_TOKENS_PER_USER = "10"
 
 # Secrets (set via: wrangler secret put <NAME> --env production)
-# TOKEN_SIGNING_KEY - 256-bit secret key for token signatures
-# CHITTYCONNECT_API_KEY - Service token for ChittyConnect integration
+# CHITTYAUTH_ISSUED_MINT_API_KEY - canonical 256-bit token signing key
+# CHITTYAUTH_ISSUED_CONNECT_API_KEY - canonical ChittyConnect service token
+# NEON_OAUTH_CLIENT_ID - Neon OAuth app client id (when CHITTYAUTH_PROVIDER=neon)
+# NEON_OAUTH_CLIENT_SECRET - Neon OAuth app client secret (when CHITTYAUTH_PROVIDER=neon)
+# Legacy aliases still supported for migration:
+# TOKEN_SIGNING_KEY
+# CHITTYCONNECT_API_KEY
 
 # Development environment
 [env.development]

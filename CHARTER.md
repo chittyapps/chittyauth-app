@@ -2,127 +2,116 @@
 
 ## Classification
 - **Canonical URI**: `chittycanon://core/services/chittyauth-app`
-- **Tier**: 3 (Service Layer)
+- **Tier**: 1 (Core Identity) — function-based; same tier as `chittyauth`, distinguished by deployment model
 - **Organization**: CHITTYAPPS
-- **Domain**: Custom (not auth.chitty.cc)
+- **Domain**: Operator-chosen (no canonical default)
 
 ## Mission
 
-ChittyAuth App is a **standalone authentication and token provisioning service** designed for independent deployment without ChittyOS infrastructure dependencies. Unlike the OS-integrated `chittyauth` service, this app uses Cloudflare-native storage (D1 + KV) and requires no external database connections.
+ChittyAuth App is a **standalone authentication and token provisioning service** that delivers ChittyAuth-class token issuance without the ChittyOS shared-database backbone. It is a Cloudflare-native build (D1 + KV) intended for third-party deployments, isolated environments, and per-app token authorities.
 
 ## Scope
 
 ### IS Responsible For
-- User registration and account management
-- API token provisioning with HMAC-SHA256 signatures
-- Token validation with KV caching (fast path)
-- Token refresh and revocation
-- Rate limiting via KV namespaces
-- Complete audit logging
+- User registration and account lifecycle (`/v1/register`)
+- API token provisioning, validation, refresh, and revocation
+- HMAC-SHA256 signing + SHA-256 hashed-at-rest token storage
+- KV-first validation cache (30s TTL) and revocation blocklist
+- Per-token rate limiting via KV counters (1h window)
+- Append-only audit logging (D1 `audit_logs`)
 - OAuth client registration
-- D1 SQLite primary storage
-- KV-first caching architecture
 
 ### IS NOT Responsible For
-- ChittyOS ecosystem integration
-- Shared identity tables (uses isolated storage)
-- Service-to-service tokens (end-user tokens only)
-- ChittyID dependency (can work standalone)
+- Service-to-service tokens (end-user tokens only — use `chittyauth` for inter-service auth)
+- Shared identity tables with `chittyos-core`
+- ChittyID minting (this app authenticates, it does not issue ChittyIDs)
+- Cross-service identity sharing (storage is isolated by design)
 
-## Comparison to chittyauth
+## Comparison to `chittyauth`
 
-| Aspect | chittyauth (CHITTYFOUNDATION) | chittyauth-app (CHITTYAPPS) |
-|--------|-------------------------------|---------------------------|
-| Database | Neon PostgreSQL (chittyos-core) | D1 + KV |
-| Dependencies | ChittyID, ChittyConnect required | Optional integrations |
+| Aspect | `chittyauth` (CHITTYFOUNDATION) | `chittyauth-app` (CHITTYAPPS) |
+|--------|---------------------------------|------------------------------|
+| Database | Neon PostgreSQL (chittyos-core) | D1 (SQLite) + KV |
+| Dependencies | ChittyID, ChittyConnect required | Optional (ChittyConnect only) |
 | Data Sharing | Shares identity data | Isolated storage |
-| Deployment | auth.chitty.cc | Any custom domain |
-| Use Case | Core ChittyOS services | Third-party apps |
-| Token Type | Service + User tokens | End-user tokens only |
+| Domain | `auth.chitty.cc` | Operator-chosen |
+| Token Audience | Service + user | End-user only |
+| Use Case | Core ChittyOS services | Third-party apps, custom deployments |
 
 ## Architecture
 
-### Storage Backend
-**D1 Database** (Primary):
-- `api_tokens` - Token records and metadata
-- `users` - User accounts
-- `audit_logs` - Complete audit trail
-- `oauth_clients` - OAuth client registrations
-
-**KV Namespaces** (Caching):
-- `AUTH_TOKENS` - Token validation cache (30s TTL)
-- `AUTH_REVOCATIONS` - Revoked token list
-- `AUTH_RATE_LIMITS` - Rate limiting counters (1h window)
-- `AUTH_AUDIT` - Audit log buffer
-
-### Token Security
-1. Generate token with HMAC-SHA256 signature
-2. Hash token with SHA-256
-3. Store only hash in D1 (never plaintext)
-4. Return plaintext to user (only time visible)
+### Storage Bindings
+- **D1** (`AUTH_DB`): `users`, `api_tokens`, `audit_logs`, `oauth_clients`
+- **KV**:
+  - `AUTH_TOKENS` — validation cache (30s TTL)
+  - `AUTH_REVOCATIONS` — revoked-token blocklist
+  - `AUTH_RATE_LIMITS` — per-token request counters (1h window)
+  - `AUTH_AUDIT` — audit-log buffer
 
 ### Validation Flow
 ```
-Request → Check KV cache (fast path)
-    → If miss: Query D1 (slow path)
-    → Cache valid token for 30 seconds
-    → Return validation result
+Request → KV cache (fast path) ──hit──→ return
+                │ miss
+                ▼
+            D1 query → cache (30s) → return
 ```
 
-## API Endpoints
-
-### Public (No Auth)
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/register` | POST | Register new user |
-| `/health` | GET | Health check |
-
-### Protected (Bearer Token)
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/v1/tokens/provision` | POST | Provision new API token |
-| `/v1/tokens/validate` | POST | Validate token |
-| `/v1/tokens/refresh` | POST | Refresh token expiration |
-| `/v1/tokens/revoke` | POST | Revoke token |
-| `/v1/tokens/stats` | GET | Token usage statistics |
-
-## Token Format
-
-JWT-like structure: `header.payload.signature`
-
+### Token Format
+JWT-like `header.payload.signature`:
 ```json
 {
   "iss": "chittyauth-app",
-  "sub": "user_id",
-  "aud": ["myapp"],
-  "scopes": ["myapp:read", "myapp:write"],
-  "iat": 1700000000,
-  "exp": 1700086400,
-  "jti": "unique_token_id"
+  "sub": "<user_id>",
+  "aud": ["<application>"],
+  "scopes": ["<scope>:<action>"],
+  "iat": 0, "exp": 0,
+  "jti": "<unique_token_id>"
 }
 ```
+Hashed with SHA-256 before storage; plaintext returned to caller exactly once at issuance.
+
+## API Contract
+
+### Public (no auth)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/register` | POST | Register a user and issue first token |
+| `/health` | GET | Liveness + binding health |
+
+### Protected (Bearer token)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/tokens/provision` | POST | Issue a new token |
+| `/v1/tokens/validate` | POST | Validate a token |
+| `/v1/tokens/refresh` | POST | Refresh expiration |
+| `/v1/tokens/revoke` | POST | Revoke immediately |
+| `/v1/tokens/stats` | GET | Usage statistics |
 
 ## Dependencies
 
-| Type | Service | Purpose |
-|------|---------|---------|
-| Optional | ChittyConnect | External integration |
-| Storage | Cloudflare D1 | SQLite database |
-| Storage | Cloudflare KV | Caching and rate limiting |
-| Runtime | Cloudflare Workers | Serverless edge |
+| Type | Component | Purpose |
+|------|-----------|---------|
+| Runtime | Cloudflare Workers | Edge serverless host |
+| Storage | Cloudflare D1 | Primary persistent store |
+| Storage | Cloudflare KV | Cache, rate limit, revocation, audit buffer |
+| Optional | ChittyConnect | External identity verification (off by default) |
 
 ## Configuration
 
 ### Required Secrets
-- `TOKEN_SIGNING_KEY` - 256-bit key for HMAC signatures
+- `CHITTYAUTH_ISSUED_MINT_API_KEY` — canonical 256-bit HMAC key (rotate quarterly)
 
 ### Optional Secrets
-- `CHITTYCONNECT_API_KEY` - For ChittyConnect integration
+- `CHITTYAUTH_ISSUED_CONNECT_API_KEY` — canonical connect service token if ChittyConnect integration is enabled
+- `NEON_OAUTH_CLIENT_ID` / `NEON_OAUTH_CLIENT_SECRET` — when `CHITTYAUTH_PROVIDER=neon`
+- Legacy alias support remains for migration: `TOKEN_SIGNING_KEY`, `CHITTYCONNECT_API_KEY`
 
 ### Environment Variables
-- `ENVIRONMENT` - "development" or "production"
-- `DEFAULT_TOKEN_EXPIRY` - Token lifetime (seconds)
-- `MAX_TOKENS_PER_USER` - Token limit per user
+- `ENVIRONMENT` — `development` | `production`
+- `CHITTYAUTH_PROVIDER` — `local` | `neon`
+- `NEON_OAUTH_HOST` — defaults to `https://oauth2.neon.tech`
+- `DEFAULT_TOKEN_EXPIRY` — seconds (default 2592000 = 30d)
+- `MAX_TOKENS_PER_USER` — integer cap
 
 ## Ownership
 
@@ -130,28 +119,24 @@ JWT-like structure: `header.payload.signature`
 |------|-------|
 | Service Owner | ChittyApps |
 | Technical Lead | @chittyapps-team |
-| Contact | auth-app@chitty.cc |
+| Security Contact | security@chitty.cc |
+| Service Contact | auth-app@chitty.cc |
 
 ## Compliance
 
-- [ ] CLAUDE.md development guide present
-- [ ] CHARTER.md present
-- [ ] CHITTY.md present
-- [ ] D1 database initialized with schema
-- [ ] All KV namespaces created and bound
-- [ ] TOKEN_SIGNING_KEY secret set (256-bit)
-- [ ] Health endpoint operational
-- [ ] Registration endpoint tested
-- [ ] Rate limiting verified
+Operational gate (must be green before deploy):
+- [ ] D1 database created and `schema.sql` applied
+- [ ] All four KV namespaces created and bound in `wrangler.toml`
+- [ ] `CHITTYAUTH_ISSUED_MINT_API_KEY` set via `wrangler secret put`
+- [ ] If Neon-backed mode is enabled: `CHITTYAUTH_PROVIDER=neon` and Neon OAuth secrets are present
+- [ ] `/health` returns `{"status":"healthy"}` with `checks.database` and `checks.kv` true
+- [ ] `/v1/register` smoke test succeeds end-to-end
+- [ ] `/v1/tokens/validate` confirms KV-cache hit on second call
+- [ ] CHARTER.md, CHITTY.md, CLAUDE.md, AGENTS.md, SECURITY.md present and consistent
 
-## Security Checklist
-
-- [ ] Rotate TOKEN_SIGNING_KEY quarterly
-- [ ] Monitor audit logs for suspicious activity
-- [ ] Token expiration set (30 days max)
-- [ ] Rate limiting on all endpoints
-- [ ] HTTPS only in production
-- [ ] Never log token values (only hashes)
+Documentation gate:
+- [ ] No mocked/placeholder routes in committed code (per global no-mocks policy)
+- [ ] No fake or seeded data in `schema.sql` (real shapes only)
 
 ---
-*Charter Version: 1.1.0 | Last Updated: 2026-02-21*
+*Charter Version: 1.2.0 | Last Updated: 2026-05-02*

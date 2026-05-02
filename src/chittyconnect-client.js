@@ -7,7 +7,7 @@ export class ChittyConnectClient {
   constructor(env) {
     this.env = env;
     this.baseUrl = env.CHITTYCONNECT_URL || 'https://connect.chitty.cc';
-    this.apiKey = env.CHITTYCONNECT_API_KEY;
+    this.apiKey = env.CHITTYAUTH_ISSUED_CONNECT_API_KEY || env.CHITTYCONNECT_API_KEY;
     this.timeout = 10000; // 10 seconds
   }
 
