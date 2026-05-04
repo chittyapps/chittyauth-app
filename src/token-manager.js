@@ -33,13 +33,14 @@ export class TokenManager {
     // Store token in D1
     if (this.env.AUTH_DB) {
       await this.env.AUTH_DB.prepare(
-        `INSERT INTO tokens (id, token_hash, chitty_id, scope, created_at, expires_at, request_count)
-         VALUES (?, ?, ?, ?, ?, ?, 0)`
+        `INSERT INTO tokens (id, token_hash, chitty_id, scope, service_name, created_at, expires_at, request_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
       ).bind(
         tokenId,
         tokenHash,
         chittyId,
         JSON.stringify(scope),
+        service,
         createdAt,
         expiresAt
       ).run();
@@ -157,6 +158,34 @@ export class TokenManager {
         timestamp: Date.now()
       });
       return { valid: false, error: 'Token not found' };
+    }
+
+    // Verify HMAC signature against the looked-up record.
+    // Shadow mode (default): log mismatch but do not reject.
+    // Enforce mode: ONLY when env.CHITTYAUTH_VERIFY_SIGNATURE strictly
+    // equals the string 'enforce'. Other truthy values ('true', '1', etc.)
+    // intentionally remain in shadow mode so a typo cannot lock everyone out.
+    const signatureOk = this.verifySignature(token, tokenData.chittyId, tokenData.service, tokenData.tokenId);
+    if (!signatureOk) {
+      await this.logAuditEvent({
+        eventType: 'signature_mismatch',
+        tokenId: tokenData.tokenId,
+        chittyId: tokenData.chittyId,
+        success: false,
+        error: 'Signature verification failed',
+        timestamp: Date.now()
+      });
+      if (this.env.CHITTYAUTH_VERIFY_SIGNATURE === 'enforce') {
+        await this.logAuditEvent({
+          eventType: 'token_validation_failed',
+          tokenId: tokenData.tokenId,
+          chittyId: tokenData.chittyId,
+          success: false,
+          error: 'Invalid signature',
+          timestamp: Date.now()
+        });
+        return { valid: false, error: 'Invalid token signature' };
+      }
     }
 
     // Check expiration
@@ -307,12 +336,81 @@ export class TokenManager {
   }
 
   /**
-   * Sign a payload with HMAC-SHA256
+   * Sign a payload with HMAC-SHA256.
+   *
+   * The 32-char (192-bit) base64url truncation MUST match the
+   * SIGNATURE_LENGTH constant in verifySignature; if you change one,
+   * change both.
    */
   signPayload(payload) {
     const hmac = crypto.createHmac('sha256', this.signingKey);
     hmac.update(payload);
     return hmac.digest('base64url').substring(0, 32);
+  }
+
+  /**
+   * Verify the HMAC signature embedded in a token.
+   *
+   * The canonical signed payload is rebuilt from the `chittyId`, `service`,
+   * and `expectedTokenId` provided by the caller (sourced from the
+   * looked-up DB record) plus the `timestamp` segment parsed from the
+   * token body itself. Comparison is timing-safe.
+   *
+   * Returns false on any of: non-string/empty token, null `chittyId` or
+   * `service`, unknown prefix, body that cannot be peeled into
+   * `tokenId_timestamp_signature`, signature length != SIGNATURE_LENGTH
+   * (32 chars), non-digit timestamp, embedded tokenId mismatch with
+   * `expectedTokenId` (when provided), or HMAC mismatch. Never throws.
+   *
+   * IMPORTANT: the signature segment is base64url, whose alphabet includes
+   * `_`. Splitting the body on `_` is therefore wrong; signatures contain
+   * underscores ~63% of the time. We peel a fixed-length suffix instead.
+   */
+  verifySignature(token, chittyId, service, expectedTokenId) {
+    if (!token || typeof token !== 'string') return false;
+    if (chittyId == null || service == null) return false;
+
+    const knownPrefixes = ['ca_live_', 'ca_test_', 'ca_dev_', 'svc_'];
+    const prefix = knownPrefixes.find((p) => token.startsWith(p));
+    if (!prefix) return false;
+
+    // Buffer.from(s, 'base64url') does not throw on malformed input — it
+    // returns a partial/empty buffer. No try/catch needed; downstream
+    // length/regex/HMAC checks handle the bad-input cases.
+    const decoded = Buffer.from(token.slice(prefix.length), 'base64url').toString('utf8');
+
+    // Body shape (issued by generateToken): `<tokenId>_<timestamp>_<signature>`
+    // - tokenId looks like `tok_<alphanumeric>` (no underscores in the random
+    //   suffix; randomString uses A-Za-z0-9 only)
+    // - timestamp is digits (Date.now())
+    // - signature is base64url (A-Za-z0-9-_), length SIGNATURE_LENGTH
+    // Right-peel signature by fixed length, then peel timestamp via lastIndexOf('_').
+    const SIGNATURE_LENGTH = 32; // must match signPayload truncation
+    if (decoded.length < SIGNATURE_LENGTH + 2) return false;
+    const sigStart = decoded.length - SIGNATURE_LENGTH;
+    if (decoded[sigStart - 1] !== '_') return false;
+    const signature = decoded.slice(sigStart);
+    const beforeSig = decoded.slice(0, sigStart - 1);
+
+    const tsSep = beforeSig.lastIndexOf('_');
+    if (tsSep < 0) return false;
+    const timestampStr = beforeSig.slice(tsSep + 1);
+    const tokenId = beforeSig.slice(0, tsSep);
+    if (!tokenId || !timestampStr) return false;
+    if (!/^\d+$/.test(timestampStr)) return false;
+    if (expectedTokenId && tokenId !== expectedTokenId) return false;
+
+    const canonicalPayload = `${tokenId}:${chittyId}:${service}:${timestampStr}`;
+    const expected = this.signPayload(canonicalPayload);
+    if (expected.length !== signature.length) return false;
+
+    // Lengths match by construction above; timingSafeEqual would only throw
+    // here if signPayload's truncation length drifted from SIGNATURE_LENGTH —
+    // an invariant violation we want surfaced loudly, not swallowed.
+    return crypto.timingSafeEqual(
+      Buffer.from(expected, 'utf8'),
+      Buffer.from(signature, 'utf8')
+    );
   }
 
   /**
