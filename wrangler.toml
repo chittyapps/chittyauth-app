@@ -41,6 +41,7 @@ ENVIRONMENT = "production"
 CHITTYCONNECT_URL = "https://connect.chitty.cc"
 CHITTYAUTH_PROVIDER = "local" # set to "neon" to enable Neon OAuth facade endpoints
 NEON_OAUTH_HOST = "https://oauth2.neon.tech"
+CHITTYROUTER_URL = "https://router.chitty.cc"
 DEFAULT_TOKEN_EXPIRY = "2592000"  # 30 days in seconds
 MAX_TOKENS_PER_USER = "10"
 
@@ -80,6 +81,7 @@ database_id = "CREATE_DEV_D1"
 [env.development.vars]
 ENVIRONMENT = "development"
 CHITTYCONNECT_URL = "https://connect-dev.chitty.cc"
+CHITTYROUTER_URL = "https://router.chitty.cc"
 DEFAULT_TOKEN_EXPIRY = "86400"  # 1 day for dev
 MAX_TOKENS_PER_USER = "50"
 
@@ -96,3 +98,15 @@ service = "chittytrack"
 
 [observability]
 enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+destinations = ["chittytrack-logs"]
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+destinations = ["chittytrack-traces"]
+persist = false
