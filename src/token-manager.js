@@ -8,7 +8,22 @@ import crypto from 'crypto';
 export class TokenManager {
   constructor(env) {
     this.env = env;
-    this.signingKey = env.CHITTYAUTH_ISSUED_MINT_API_KEY || env.TOKEN_SIGNING_KEY || 'dev-signing-key-change-in-production';
+    // Fail closed: no hardcoded fallback. Operators MUST set the secret.
+    // Acceptable canonical name first, legacy alias second; both checked for
+    // truthy non-empty strings (env can deliver '' on misconfigured bindings).
+    const key = env.CHITTYAUTH_ISSUED_MINT_API_KEY || env.TOKEN_SIGNING_KEY;
+    if (!key || typeof key !== 'string' || key.length === 0) {
+      throw new Error(
+        'CHITTYAUTH_ISSUED_MINT_API_KEY (or legacy TOKEN_SIGNING_KEY) must be set as a Worker secret'
+      );
+    }
+    // Strength check ONLY in production — local dev / tests use shorter keys.
+    // 32 characters is the minimum for ~192 bits of base64url entropy or ~128
+    // bits of hex; that's the entropy floor we accept for HMAC-SHA256.
+    if (env.ENVIRONMENT === 'production' && key.length < 32) {
+      throw new Error('Signing key must be at least 32 characters in production');
+    }
+    this.signingKey = key;
     this.defaultExpiry = parseInt(env.DEFAULT_TOKEN_EXPIRY || '2592000'); // 30 days
   }
 
@@ -104,6 +119,18 @@ export class TokenManager {
       return { valid: false, error: 'Invalid token format' };
     }
 
+    const isLegacyServiceToken = token.startsWith('svc_');
+    const parsedToken = isLegacyServiceToken ? null : this.parseToken(token);
+    if (!isLegacyServiceToken && !parsedToken) {
+      await this.logAuditEvent({
+        eventType: 'token_validation_failed',
+        error: 'Token parse failed',
+        success: false,
+        timestamp: Date.now()
+      });
+      return { valid: false, error: 'Invalid token format' };
+    }
+
     const tokenHash = await this.hashToken(token);
 
     // Check if revoked
@@ -157,6 +184,21 @@ export class TokenManager {
         timestamp: Date.now()
       });
       return { valid: false, error: 'Token not found' };
+    }
+
+    if (!isLegacyServiceToken) {
+      const signatureValid = this.verifySignature(parsedToken, tokenData);
+      if (!signatureValid) {
+        await this.logAuditEvent({
+          eventType: 'token_validation_failed',
+          tokenId: tokenData.tokenId,
+          chittyId: tokenData.chittyId,
+          error: 'Token signature mismatch',
+          success: false,
+          timestamp: Date.now()
+        });
+        return { valid: false, error: 'Invalid token signature' };
+      }
     }
 
     // Check expiration
@@ -313,6 +355,55 @@ export class TokenManager {
     const hmac = crypto.createHmac('sha256', this.signingKey);
     hmac.update(payload);
     return hmac.digest('base64url').substring(0, 32);
+  }
+
+  /**
+   * Parse encoded token payload.
+   */
+  parseToken(token) {
+    try {
+      const parts = token.split('_');
+      if (parts.length < 3) {
+        return null;
+      }
+      const encoded = parts.slice(2).join('_');
+      const decoded = Buffer.from(encoded, 'base64url').toString('utf8');
+      const match = decoded.match(/^(tok_[A-Za-z0-9]+)_(\d+)_(.+)$/);
+      if (!match) {
+        return null;
+      }
+      const tokenId = match[1];
+      const issuedAtRaw = match[2];
+      const signature = match[3];
+      const issuedAt = parseInt(issuedAtRaw, 10);
+      if (!tokenId || Number.isNaN(issuedAt) || !signature) {
+        return null;
+      }
+      return { tokenId, issuedAt, signature };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Verify embedded token signature against trusted DB/KV metadata.
+   */
+  verifySignature(parsedToken, tokenData) {
+    if (!parsedToken || !tokenData) {
+      return false;
+    }
+    if (!tokenData.chittyId || !tokenData.service) {
+      return false;
+    }
+    const payload = `${parsedToken.tokenId}:${tokenData.chittyId}:${tokenData.service}:${parsedToken.issuedAt}`;
+    const expected = this.signPayload(payload);
+    const provided = parsedToken.signature;
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    const providedBuf = Buffer.from(provided, 'utf8');
+    if (expectedBuf.length !== providedBuf.length) {
+      return false;
+    }
+    return crypto.timingSafeEqual(expectedBuf, providedBuf);
   }
 
   /**

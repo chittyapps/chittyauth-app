@@ -18,7 +18,7 @@ ChittyAuth App is a **standalone authentication and token provisioning service**
 - HMAC-SHA256 signing + SHA-256 hashed-at-rest token storage
 - KV-first validation cache (30s TTL) and revocation blocklist
 - Per-token rate limiting via KV counters (1h window)
-- Append-only audit logging (D1 `audit_logs`)
+- Append-only audit logging (D1 `auth_events`)
 - OAuth client registration
 
 ### IS NOT Responsible For
@@ -41,14 +41,18 @@ ChittyAuth App is a **standalone authentication and token provisioning service**
 ## Architecture
 
 ### Storage Bindings
-- **D1** (`AUTH_DB`): `users`, `api_tokens`, `audit_logs`, `oauth_clients`
+- **D1** (`AUTH_DB`): `tokens`, `service_credentials`, `auth_events`, `token_stats`, `service_health`, `registrations` (from `schema-update.sql`)
 - **KV**:
   - `AUTH_TOKENS` — validation cache (30s TTL)
   - `AUTH_REVOCATIONS` — revoked-token blocklist
   - `AUTH_RATE_LIMITS` — per-token request counters (1h window)
   - `AUTH_AUDIT` — audit-log buffer
 
-### Validation Flow
+### Provider Modes
+- `CHITTYAUTH_PROVIDER=local` (default) — D1+KV-backed token authority described above.
+- `CHITTYAUTH_PROVIDER=neon` — Neon OAuth facade (`src/auth-provider.js`); `api-router.js` exposes authorize/exchange endpoints. The local validation flow below applies to provider=local; the Neon path delegates issuance to Neon's OAuth endpoint.
+
+### Validation Flow (provider=local)
 ```
 Request → KV cache (fast path) ──hit──→ return
                 │ miss
@@ -129,7 +133,7 @@ Operational gate (must be green before deploy):
 - [ ] All four KV namespaces created and bound in `wrangler.toml`
 - [ ] `CHITTYAUTH_ISSUED_MINT_API_KEY` set via `wrangler secret put`
 - [ ] If Neon-backed mode is enabled: `CHITTYAUTH_PROVIDER=neon` and Neon OAuth secrets are present
-- [ ] `/health` returns `{"status":"healthy"}` with `checks.database` and `checks.kv` true
+- [ ] `/health` returns `{"status":"healthy"}` with `dependencies.chittyConnect === "healthy"` (current shape per `api-router.js:392-403`; richer `checks.database`/`checks.kv` reporting is a future health-endpoint enhancement)
 - [ ] `/v1/register` smoke test succeeds end-to-end
 - [ ] `/v1/tokens/validate` confirms KV-cache hit on second call
 - [ ] CHARTER.md, CHITTY.md, CLAUDE.md, AGENTS.md, SECURITY.md present and consistent
@@ -139,4 +143,4 @@ Documentation gate:
 - [ ] No fake or seeded data in `schema.sql` (real shapes only)
 
 ---
-*Charter Version: 1.2.0 | Last Updated: 2026-05-02*
+*Charter Version: 1.3.0 | Last Updated: 2026-05-02*
