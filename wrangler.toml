@@ -1,6 +1,6 @@
 name = "chittyauth"
 main = "worker.js"
-compatibility_date = "2026-03-16"
+compatibility_date = "2026-08-07"
 compatibility_flags = ["nodejs_compat"]
 account_id = "0bc21e3a5a9de1a4cc843be9c3e98121"  # ChittyCorp LLC main account
 
