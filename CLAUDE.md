@@ -6,25 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ChittyAuth App** is a standalone authentication and token provisioning service designed for independent deployment without ChittyOS infrastructure dependencies. Unlike the OS-integrated `chittyauth` service, this app uses Cloudflare-native storage (D1 + KV) and requires no external database connections.
+**ChittyAuth App** is the production authentication and token provisioning service for the ChittyOS ecosystem, deployed at `auth.chitty.cc`. It uses Cloudflare-native storage (D1 + KV) as the primary backend, with an optional Neon OAuth facade (`CHITTYAUTH_PROVIDER=neon`) for federation.
 
 **Key characteristics:**
-- Runs on Cloudflare Workers (serverless edge runtime)
-- Uses D1 (SQLite) for primary storage
-- Uses KV namespaces for caching and rate limiting
-- Zero external dependencies (no Neon PostgreSQL, no chittyos-core)
-- Fully isolated from ChittyOS ecosystem
-- Can be deployed to any Cloudflare account
+- Worker `name="chittyauth"`, deployed to `auth.chitty.cc/*` on the ChittyCorp account
+- D1 (SQLite) as the primary token/event store; KV for hot-path caching and rate limits
+- Optional ChittyConnect integration for credential brokerage
+- Provider modes: `local` (D1+KV only) or `neon` (Neon OAuth facade enabled)
+- Tail-consumed by `chittytrack` for observability per canonical Worker policy
 
 ## Architecture
 
-### Storage Backend: D1 + KV (Standalone)
+### Storage Backend: D1 + KV
 
-**D1 Database** (Primary storage):
-- `api_tokens` - Token records and metadata
-- `users` - User accounts (if using registration)
-- `audit_logs` - Complete audit trail
-- `oauth_clients` - OAuth client registrations
+**D1 Database** (`AUTH_DB`, primary storage — schema in `schema.sql`):
+- `tokens` - Token records and metadata
+- `service_credentials` - Service-to-service credentials
+- `auth_events` - Audit trail (issuance, validation, revocation)
+- `token_stats` - Per-token usage counters
+- `service_health` - Health snapshots
+- `registrations` - Public-registration intake
 
 **KV Namespaces** (Caching & fast access):
 - `AUTH_TOKENS` - Token validation cache
@@ -32,15 +33,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `AUTH_RATE_LIMITS` - Rate limiting counters
 - `AUTH_AUDIT` - Audit log buffer
 
-### Comparison to chittyauth (OS-integrated)
+### Provider Modes
 
-| Aspect | chittyauth (chittyfoundation) | chittyauth-app (chittyapps) |
-|--------|------------------------------|---------------------------|
-| Database | Neon PostgreSQL (chittyos-core) | D1 + KV |
-| Dependencies | ChittyID, ChittyConnect required | Optional integrations |
-| Data Sharing | Shares identity data | Isolated storage |
-| Deployment | auth.chitty.cc | Any custom domain |
-| Use Case | Core ChittyOS services | Third-party apps |
+| Mode | When | What it enables |
+|------|------|-----------------|
+| `local` (default) | Self-contained Cloudflare deploy | D1+KV token lifecycle only |
+| `neon` | Federated OAuth via Neon | Adds Neon OAuth facade in `src/auth-provider.js` (`/oauth/*`) on top of local D1+KV |
 
 ## Development Commands
 
@@ -231,9 +229,10 @@ id = "..."
 - `DEFAULT_TOKEN_EXPIRY` - Default token lifetime (seconds)
 - `MAX_TOKENS_PER_USER` - Max tokens per user
 
-### Secrets
-- `TOKEN_SIGNING_KEY` - Required, 256-bit key for HMAC signatures
-- `CHITTYCONNECT_API_KEY` - Optional, for ChittyConnect integration
+### Secrets (canonical names)
+- `CHITTYAUTH_ISSUED_MINT_API_KEY` - Required, 256-bit key for HMAC signatures (legacy alias: `TOKEN_SIGNING_KEY`)
+- `CHITTYAUTH_ISSUED_CONNECT_API_KEY` - Optional, ChittyConnect service token (legacy alias: `CHITTYCONNECT_API_KEY`)
+- `NEON_OAUTH_CLIENT_ID` / `NEON_OAUTH_CLIENT_SECRET` - Required when `CHITTYAUTH_PROVIDER=neon`
 
 ## Troubleshooting
 
@@ -271,7 +270,7 @@ wrangler kv:namespace list
 
 ## Security Best Practices
 
-1. **Rotate TOKEN_SIGNING_KEY quarterly**
+1. **Rotate `CHITTYAUTH_ISSUED_MINT_API_KEY` quarterly**
 2. **Monitor audit logs for suspicious activity**
 3. **Set appropriate token expiration (30 days max)**
 4. **Implement rate limiting on all endpoints**
@@ -285,7 +284,7 @@ Before deploying to production:
 
 - [ ] All KV namespaces created and bound
 - [ ] D1 database created and schema initialized
-- [ ] `TOKEN_SIGNING_KEY` secret set (256-bit)
+- [ ] `CHITTYAUTH_ISSUED_MINT_API_KEY` secret set (256-bit)
 - [ ] `wrangler.toml` updated with correct IDs
 - [ ] Custom domain configured (if desired)
 - [ ] Secrets verified: `wrangler secret list`
@@ -299,16 +298,16 @@ Before deploying to production:
 - [DEPLOYMENT.md](./DEPLOYMENT.md) - Step-by-step deployment instructions
 - [API_SPEC.md](./API_SPEC.md) - (TBD) API contracts and schemas
 
-## Differences from chittyauth
+## Implementation Notes
 
-When working on this codebase, remember these key differences from the OS-integrated `chittyauth`:
+Working on this codebase, keep these load-bearing facts in mind:
 
-1. **No Neon PostgreSQL** - Uses D1 instead
-2. **No shared tables** - All data is isolated
-3. **No ChittyID dependency** - Can work standalone
-4. **KV-first architecture** - Heavy caching for performance
-5. **No service-to-service tokens** - Designed for end-user tokens only
-6. **Simpler schema** - Fewer tables, focused on token management
+1. **D1 is the primary store**; Neon is only reachable via the OAuth facade when `CHITTYAUTH_PROVIDER=neon`.
+2. **KV is hot-path cache** for token validation (30s TTL) and revocation checks — never the source of truth.
+3. **Canonical secrets** (`CHITTYAUTH_ISSUED_*`) are authoritative; legacy `TOKEN_SIGNING_KEY` / `CHITTYCONNECT_API_KEY` remain as migration aliases only.
+4. **Signing-key fallback fails closed** in production (per #9). Dev still tolerates the dev fallback.
+5. **Token validation is hash-lookup, not signature-verify** today — see SECURITY.md Known Limitation #3.
+6. **Schema source of truth** is `schema.sql`. If a doc disagrees, the schema wins.
 
 ## Common Development Patterns
 
@@ -333,5 +332,5 @@ When working on this codebase, remember these key differences from the OS-integr
 
 ---
 
-**Last Updated**: 2025-11-06
+**Last Updated**: 2026-05-23
 **Maintainer**: ChittyApps Team
